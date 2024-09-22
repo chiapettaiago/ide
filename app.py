@@ -2,6 +2,7 @@ from flask import Flask, request, render_template_string, jsonify
 import subprocess
 import os
 import re
+import platform
 
 app = Flask(__name__)
 
@@ -287,8 +288,12 @@ def execute_code():
         return jsonify({'output': 'Execution blocked due to dangerous code patterns.'})
 
     try:
+        if platform.system() == 'Windows':
+            linguagem = "python"
+        else:
+            linguagem = "python3"
         # Executa o código em um subprocesso
-        result = subprocess.run(['python', '-c', content], capture_output=True, text=True)
+        result = subprocess.run([linguagem, '-c', content], capture_output=True, text=True)
         return jsonify({'output': result.stdout + result.stderr})
     except Exception as e:
         return jsonify({'output': str(e)})
