@@ -1,12 +1,25 @@
 from flask import Flask, request, render_template_string, jsonify
 import subprocess
 import os
+import re
 
 app = Flask(__name__)
 
 USER_FILES_DIR = 'user_files'
 if not os.path.exists(USER_FILES_DIR):
     os.makedirs(USER_FILES_DIR)
+
+# Define a lista de comandos ou módulos perigosos
+FORBIDDEN_PATTERNS = [
+    r'import\s+os',          # Impedir importação do módulo 'os'
+    r'import\s+subprocess',  # Impedir importação do módulo 'subprocess'
+    r'eval\(',               # Impedir uso de eval
+    r'exec\(',               # Impedir uso de exec
+    r'system\(',             # Impedir uso de system para executar comandos shell
+    r'open\(',               # Impedir o uso de open (potencialmente perigoso)
+    r'rm\s+-rf',             # Evitar comandos de remoção
+    r'import\s+sys',         # Evitar importação do sys (pode manipular saída de dados)
+]
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -68,55 +81,32 @@ HTML_TEMPLATE = '''
         let currentPath = '';
         let editor;
 
-        // Initialize CodeMirror
-        document.addEventListener('DOMContentLoaded', (event) => {
-            editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
-                mode: "python",
-                theme: "monokai",
-                lineNumbers: true,
-                autoCloseBrackets: true,
-                matchBrackets: true,
-                indentUnit: 4,
-                tabSize: 4,
-                indentWithTabs: false,
-                extraKeys: {"Ctrl-Space": "autocomplete"}
-            });
-
-            editor.on("inputRead", function(editor, change) {
-                if (change.origin !== "+input") return;
-                var cur = editor.getCursor();
-                var token = editor.getTokenAt(cur);
-                if (token.type === "variable" || token.string.trim() !== "") {
-                    editor.showHint({
-                        completeSingle: false,
-                        hint: function(editor) {
-                            var cursor = editor.getCursor();
-                            var token = editor.getTokenAt(cursor);
-                            var start = token.start;
-                            var end = cursor.ch;
-                            var line = cursor.line;
-                            var currentWord = token.string;
-
-                            var wordList = [
-                                "def", "class", "if", "else", "elif", "for", "while", "try", "except",
-                                "import", "from", "as", "return", "print", "len", "range", "int", "str",
-                                "float", "list", "dict", "set", "tuple", "True", "False", "None"
-                            ];
-
-                            var result = wordList.filter(function(item) {
-                                return item.indexOf(currentWord) === 0;
-                            });
-
-                            return {
-                                list: result,
-                                from: CodeMirror.Pos(line, start),
-                                to: CodeMirror.Pos(line, end)
-                            };
-                        }
-                    });
-                }
-            });
+         // Inicializa o CodeMirror
+    document.addEventListener('DOMContentLoaded', (event) => {
+        editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+            mode: "python",
+            theme: "monokai",
+            lineNumbers: true,
+            autoCloseBrackets: true,
+            matchBrackets: true,
+            indentUnit: 4,
+            tabSize: 4,
+            indentWithTabs: false,
+            extraKeys: {
+                "Ctrl-Space": "autocomplete"  // Atalho para o autocompletar manual
+            }
         });
+
+        // Ativar o autocompletar enquanto o usuário digita
+        editor.on("inputRead", function(cm, event) {
+            if (!cm.state.completionActive && event.text[0] !== ' ') { // Verifica se o autocompletar não está ativo
+                cm.showHint({
+                    hint: CodeMirror.hint.anyword,
+                    completeSingle: false // Evita completar automaticamente com uma única sugestão
+                });
+            }
+        });
+    });
 
         function updateFileTree() {
             fetch('/files' + (currentPath ? `?path=${currentPath}` : ''))
@@ -216,7 +206,8 @@ HTML_TEMPLATE = '''
                 body: JSON.stringify({content})
             }).then(response => response.json())
               .then(data => {
-                  document.getElementById('output').value = data.output;
+                  const output = document.getElementById('output');
+                  output.value = data.output;
               });
         }
 
@@ -226,90 +217,81 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+# Função para verificar padrões perigosos no código
+def contains_forbidden_patterns(code):
+    for pattern in FORBIDDEN_PATTERNS:
+        if re.search(pattern, code):
+            return True
+    return False
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/files')
+@app.route('/files', methods=['GET'])
 def list_files():
     path = request.args.get('path', '')
     full_path = os.path.join(USER_FILES_DIR, path)
-    files = []
-    folders = []
-    for item in os.listdir(full_path):
-        item_path = os.path.join(full_path, item)
-        if os.path.isfile(item_path):
-            files.append(item)
-        elif os.path.isdir(item_path):
-            folders.append(item)
-    return jsonify({"files": files, "folders": folders})
+    
+    if not os.path.exists(full_path):
+        return jsonify({'error': 'Path does not exist'}), 400
 
-@app.route('/load/<path:filename>')
+    files = [f for f in os.listdir(full_path) if os.path.isfile(os.path.join(full_path, f))]
+    folders = [f for f in os.listdir(full_path) if os.path.isdir(os.path.join(full_path, f))]
+    
+    return jsonify({'files': files, 'folders': folders})
+
+@app.route('/load/<path:filename>', methods=['GET'])
 def load_file(filename):
-    file_path = os.path.join(USER_FILES_DIR, filename)
-    if os.path.exists(file_path) and os.path.isfile(file_path):
-        with open(file_path, 'r') as f:
+    full_path = os.path.join(USER_FILES_DIR, filename)
+    if os.path.exists(full_path):
+        with open(full_path, 'r') as f:
             return f.read()
-    return "File not found", 404
+    return '', 404
 
 @app.route('/save', methods=['POST'])
 def save_file():
-    data = request.json
-    filename = data['filename']
-    content = data['content']
+    data = request.get_json()
+    filename = data.get('filename')
+    content = data.get('content')
     
-    file_path = os.path.join(USER_FILES_DIR, filename)
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, 'w') as f:
+    full_path = os.path.join(USER_FILES_DIR, filename)
+    with open(full_path, 'w') as f:
         f.write(content)
     
-    return jsonify({"message": f"File {filename} saved successfully"})
+    return jsonify({'message': 'File saved successfully'})
 
 @app.route('/create', methods=['POST'])
 def create_item():
-    data = request.json
+    data = request.get_json()
+    name = data.get('name')
     path = data.get('path', '')
-    name = data['name']
-    item_type = data['type']
-    
+    item_type = data.get('type')
+
     full_path = os.path.join(USER_FILES_DIR, path, name)
     
     if item_type == 'file':
-        if not os.path.exists(full_path):
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            open(full_path, 'a').close()
-            return jsonify({"message": f"File {name} created successfully"})
-        else:
-            return jsonify({"message": f"File {name} already exists"}), 400
+        with open(full_path, 'w') as f:
+            f.write('')
     elif item_type == 'folder':
-        if not os.path.exists(full_path):
-            os.makedirs(full_path)
-            return jsonify({"message": f"Folder {name} created successfully"})
-        else:
-            return jsonify({"message": f"Folder {name} already exists"}), 400
-    else:
-        return jsonify({"message": "Invalid item type"}), 400
+        os.makedirs(full_path, exist_ok=True)
+    
+    return jsonify({'message': f'{item_type.capitalize()} created successfully'})
 
 @app.route('/execute', methods=['POST'])
 def execute_code():
-    data = request.json
-    content = data['content']
-    
-    temp_file = os.path.join(USER_FILES_DIR, 'temp_code.py')
-    with open(temp_file, 'w') as f:
-        f.write(content)
-    
+    data = request.get_json()
+    content = data.get('content')
+
+    if contains_forbidden_patterns(content):
+        return jsonify({'output': 'Execution blocked due to dangerous code patterns.'})
+
     try:
-        result = subprocess.run(['python', temp_file], capture_output=True, text=True, timeout=5)
-        output = result.stdout + result.stderr
-    except subprocess.TimeoutExpired:
-        output = "Execution timed out after 5 seconds"
+        # Executa o código em um subprocesso
+        result = subprocess.run(['python', '-c', content], capture_output=True, text=True)
+        return jsonify({'output': result.stdout + result.stderr})
     except Exception as e:
-        output = str(e)
-    
-    os.remove(temp_file)
-    
-    return jsonify({"output": output})
+        return jsonify({'output': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')
