@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser IDE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/hint/show-hint.min.css">
+    <style>
+        #file-tree { height: 400px; overflow-y: auto; }
+        .folder { cursor: pointer; }
+        .file { cursor: pointer; }
+        .CodeMirror { height: 300px; }
+        #output { height: 150px; }
+        #new-item-section { display: none; } /* Escondido por padrão */
+    </style>
+</head>
+<body>
+    <div class="container-fluid mt-3">
+        <h1 class="mb-4 text-center">Browser IDE</h1>
+        <div class="row">
+            <div class="col-md-3">
+                <h4>File Explorer</h4>
+                <div id="file-tree" class="border p-2"></div>
+
+                <!-- Secção para criar novos arquivos/pastas -->
+                <div id="new-item-section" class="mt-2">
+                    <input type="text" id="new-item-name" class="form-control" placeholder="New file/folder name">
+                    <button id="create-item-btn" class="btn btn-primary mt-2"></button>
+                </div>
+
+                <!-- Botões de criar arquivo e pasta -->
+                <div class="mt-3">
+                    <button onclick="showCreateSection('file')" class="btn btn-primary mr-3"><i class="fa-solid fa-file"></i></button>
+                    <button onclick="showCreateSection('folder')" class="btn btn-secondary"><i class="fa-solid fa-folder"></i></button>
+                </div>
+            </div>
+            <div class="col-md-9">
+                <div class="mb-3">
+                    <label for="filename" class="form-label">Current File:</label>
+                    <input type="text" id="filename" class="form-control" readonly>
+                </div>
+                <textarea id="editor"></textarea>
+                <div class="mt-3">
+                    <button onclick="saveFile()" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i></button>
+                    <button onclick="executeCode()" class="btn btn-success"><i class="fa-solid fa-play"></i></button>
+                </div>
+                <textarea id="output" class="form-control mt-3 mb-3" readonly></textarea>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/addon/hint/show-hint.min.js"></script>
+    <script src="https://kit.fontawesome.com/39df25bfda.js" crossorigin="anonymous"></script>
+    <script>
+        let currentFile = '';
+        let currentPath = '';
+        let editor;
+
+        // Inicializa o CodeMirror
+        document.addEventListener('DOMContentLoaded', (event) => {
+            editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+                mode: "python",
+                theme: "monokai",
+                lineNumbers: true,
+                autoCloseBrackets: true,
+                matchBrackets: true,
+                indentUnit: 4,
+                tabSize: 4,
+                indentWithTabs: false,
+                extraKeys: {
+                    "Ctrl-Space": "autocomplete"  // Atalho para o autocompletar manual
+                }
+            });
+
+            // Ativar o autocompletar enquanto o usuário digita
+            editor.on("inputRead", function(cm, event) {
+                if (!cm.state.completionActive && event.text[0] !== ' ') {
+                    cm.showHint({
+                        hint: CodeMirror.hint.anyword,
+                        completeSingle: false
+                    });
+                }
+            });
+        });
+
+        // Função para exibir a seção de criação de arquivo ou pasta
+        function showCreateSection(type) {
+            const section = document.getElementById('new-item-section');
+            const button = document.getElementById('create-item-btn');
+            const input = document.getElementById('new-item-name');
+
+            // Atualiza o placeholder e o texto do botão de acordo com o tipo
+            input.placeholder = `New ${type} name`;
+            button.innerText = type === 'file' ? 'Create New File' : 'Create New Folder';
+
+            // Define a função correta de criação ao clicar no botão
+            button.onclick = type === 'file' ? createFile : createFolder;
+
+            // Exibe a seção de criação
+            section.style.display = 'block';
+        }
+
+        function updateFileTree() {
+            fetch('/files' + (currentPath ? `?path=${currentPath}` : ''))
+                .then(response => response.json())
+                .then(data => {
+                    const fileTree = document.getElementById('file-tree');
+                    fileTree.innerHTML = '';
+                    if (currentPath) {
+                        const backFolder = document.createElement('div');
+                        backFolder.innerHTML = '<i class="bi bi-arrow-up"></i> ..';
+                        backFolder.onclick = () => {
+                            currentPath = currentPath.split('/').slice(0, -1).join('/');
+                            updateFileTree();
+                        };
+                        fileTree.appendChild(backFolder);
+                    }
+                    data.folders.forEach(folder => {
+                        const div = document.createElement('div');
+                        div.className = 'folder';
+                        div.innerHTML = `<i class="bi bi-folder"></i> ${folder}`;
+                        div.onclick = () => {
+                            currentPath = currentPath ? `${currentPath}/${folder}` : folder;
+                            updateFileTree();
+                        };
+                        fileTree.appendChild(div);
+                    });
+                    data.files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'file';
+                        div.innerHTML = `<i class="bi bi-file-text"></i> ${file}`;
+                        div.onclick = () => loadFile(file);
+                        fileTree.appendChild(div);
+                    });
+                });
+        }
+
+        function loadFile(filename) {
+            fetch(`/load/${currentPath ? currentPath + '/' : ''}${filename}`)
+                .then(response => response.text())
+                .then(content => {
+                    editor.setValue(content);
+                    document.getElementById('filename').value = filename;
+                    currentFile = filename;
+                });
+        }
+
+        function saveFile() {
+            const content = editor.getValue();
+            fetch('/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: `${currentPath ? currentPath + '/' : ''}${currentFile}`, content})
+            }).then(response => response.json())
+              .then(data => {
+                  alert(data.message);
+                  updateFileTree();
+              });
+        }
+
+        function createFile() {
+            const filename = document.getElementById('new-item-name').value;
+            if (filename) {
+                fetch('/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({path: currentPath, name: filename, type: 'file'})
+                }).then(response => response.json())
+                  .then(data => {
+                      alert(data.message);
+                      updateFileTree();
+                      resetNewItemSection();
+                  });
+            }
+        }
+
+        function createFolder() {
+            const foldername = document.getElementById('new-item-name').value;
+            if (foldername) {
+                fetch('/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({path: currentPath, name: foldername, type: 'folder'})
+                }).then(response => response.json())
+                  .then(data => {
+                      alert(data.message);
+                      updateFileTree();
+                      resetNewItemSection();
+                  });
+            }
+        }
+
+        // Função para resetar o campo de entrada e ocultar a seção
+        function resetNewItemSection() {
+            document.getElementById('new-item-name').value = '';
+            document.getElementById('new-item-section').style.display = 'none';
+        }
+
+        function executeCode() {
+            const content = editor.getValue();
+            fetch('/execute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({content})
+            }).then(response => response.json())
+              .then(data => {
+                  document.getElementById('output').value = data.output;
+              });
+        }
+    </script>
+</body>
+</html>
