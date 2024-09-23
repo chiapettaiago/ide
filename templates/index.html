@@ -90,6 +90,15 @@
             });
         });
 
+        // Recupera o estado salvo da árvore de arquivos
+        const savedPath = localStorage.getItem('currentPath');
+            if (savedPath) {
+                currentPath = savedPath;
+            }
+
+            // Carrega a árvore de arquivos
+            updateFileTree();
+
         // Função para exibir a seção de criação de arquivo ou pasta
         function showCreateSection(type) {
             const section = document.getElementById('new-item-section');
@@ -119,6 +128,7 @@
                         backFolder.onclick = () => {
                             currentPath = currentPath.split('/').slice(0, -1).join('/');
                             updateFileTree();
+                            saveFileTreeState();
                         };
                         fileTree.appendChild(backFolder);
                     }
@@ -129,6 +139,7 @@
                         div.onclick = () => {
                             currentPath = currentPath ? `${currentPath}/${folder}` : folder;
                             updateFileTree();
+                            saveFileTreeState();
                         };
                         fileTree.appendChild(div);
                     });
@@ -142,6 +153,10 @@
                 });
         }
 
+        function saveFileTreeState() {
+            localStorage.setItem('currentPath', currentPath);
+        }
+        
         function loadFile(filename) {
             fetch(`/load/${currentPath ? currentPath + '/' : ''}${filename}`)
                 .then(response => response.text())

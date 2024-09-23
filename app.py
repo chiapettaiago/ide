@@ -22,6 +22,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
+    current_file = db.Column(db.String(255))  # New column to store the current file
 
     def __repr__(self):
         return f'<User {self.username}>'
@@ -57,7 +58,10 @@ def login_required(f):
 @app.route('/')
 @login_required
 def index():
-    return render_template('index.html')
+    username = session['username']
+    user = User.query.filter_by(username=username).first()
+    current_file = user.current_file if user else None
+    return render_template('index.html', current_file=current_file)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -120,6 +124,10 @@ def list_files():
 @login_required
 def load_file(filename):
     username = session['username']
+    user = User.query.filter_by(username=username).first()
+    user.current_file = filename
+    db.session.commit()
+    
     full_path = os.path.join(USERS_DIR, username, filename)
     if os.path.exists(full_path):
         with open(full_path, 'r') as f:
@@ -133,6 +141,10 @@ def save_file():
     data = request.get_json()
     filename = data.get('filename')
     content = data.get('content')
+    
+    user = User.query.filter_by(username=username).first()
+    user.current_file = filename
+    db.session.commit()
     
     full_path = os.path.join(USERS_DIR, username, filename)
     with open(full_path, 'w') as f:
